@@ -1,15 +1,47 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { Collapsible } from '@/components/ui/collapsible';
 import { ExternalLink } from '@/components/external-link';
 import ParallaxScrollView from '@/components/parallax-scroll-view';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { Collapsible } from '@/components/ui/collapsible';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Fonts } from '@/constants/theme';
+import { supabase } from '@/lib/supabase';
+import { Image } from 'expo-image';
+import { useEffect, useState } from 'react';
+import { Platform, StyleSheet } from 'react-native';
+
+type Test = {
+  id: number;
+  text: string;
+}
 
 export default function TabTwoScreen() {
+  const [test, setTest] = useState<Test[] | null>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadTests = async () => {
+      setLoading(true);
+      setError(null);
+
+      const { data, error } = await supabase
+      .from('test')
+      .select('id, text');
+
+    if (error) {
+      setError(error.message);
+    } else {
+      setTest(data);
+    }
+
+    setLoading(false);
+    };
+
+    loadTests();
+  }, []);
+
+
   return (
     <ParallaxScrollView
       headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
@@ -94,6 +126,11 @@ export default function TabTwoScreen() {
           ),
         })}
       </Collapsible>
+      <ThemedText>
+        {loading && 'Loading...'}
+        {error && `Error: ${error}`}
+        {test && test.map((t) => <ThemedText key={t.id}>{t.text}</ThemedText>)}
+      </ThemedText>
     </ParallaxScrollView>
   );
 }
