@@ -11,7 +11,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { WeatherTrendChart } from '@/components/weather-trend-chart';
-import { HistoryData, HistoryRecord, WeatherTrendPoint, fetchHistoryTemplate } from '@/lib/weather-data-template';
+import {
+  HistoryData,
+  HistoryRecord,
+  WeatherTrendPoint,
+  fetchHistoryTemplate,
+  subscribeToNewWeatherRows,
+} from '@/lib/weather-data-template';
 
 const COLORS = {
   background: '#f7f9fc',
@@ -55,9 +61,12 @@ export default function HistoryScreen() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadData = async () => {
-      setLoading(true);
+    const loadData = async (showLoadingState: boolean) => {
+      if (showLoadingState) {
+        setLoading(true);
+      }
       setError(null);
+
       try {
         const payload = await fetchHistoryTemplate();
         if (!isMounted) {
@@ -74,19 +83,25 @@ export default function HistoryScreen() {
         if (!isMounted) {
           return;
         }
+
         const message = caughtError instanceof Error ? caughtError.message : 'Unknown error';
         setError(message);
       } finally {
-        if (isMounted) {
+        if (isMounted && showLoadingState) {
           setLoading(false);
         }
       }
     };
 
-    loadData();
+    void loadData(true);
+
+    const unsubscribe = subscribeToNewWeatherRows(() => {
+      void loadData(false);
+    });
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
   }, []);
 

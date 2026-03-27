@@ -1,4 +1,4 @@
-import { MaterialIcons } from '@expo/vector-icons';
+﻿import { MaterialIcons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -12,7 +12,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { WeatherTrendChart } from '@/components/weather-trend-chart';
-import { CurrentWeatherData, fetchCurrentWeatherTemplate } from '@/lib/weather-data-template';
+import {
+  CurrentWeatherData,
+  fetchCurrentWeatherTemplate,
+  subscribeToNewWeatherRows,
+} from '@/lib/weather-data-template';
 
 const COLORS = {
   background: '#f7f9fc',
@@ -44,33 +48,43 @@ export default function CurrentWeatherDashboardScreen() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadData = async () => {
-      setLoading(true);
+    const loadData = async (showLoadingState: boolean) => {
+      if (showLoadingState) {
+        setLoading(true);
+      }
       setError(null);
+
       try {
         const payload = await fetchCurrentWeatherTemplate();
         if (!isMounted) {
           return;
         }
+
         setData(payload);
         setFocusedPointIndex(Math.max(0, payload.trendPoints.length - 2));
       } catch (caughtError) {
         if (!isMounted) {
           return;
         }
+
         const message = caughtError instanceof Error ? caughtError.message : 'Unknown error';
         setError(message);
       } finally {
-        if (isMounted) {
+        if (isMounted && showLoadingState) {
           setLoading(false);
         }
       }
     };
 
-    loadData();
+    void loadData(true);
+
+    const unsubscribe = subscribeToNewWeatherRows(() => {
+      void loadData(false);
+    });
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
   }, []);
 
@@ -292,7 +306,7 @@ const styles = StyleSheet.create({
   },
   tempValue: {
     color: COLORS.primary,
-    fontSize: 92,
+    fontSize: 86,
     fontWeight: '800',
     lineHeight: 92,
     letterSpacing: -2,
