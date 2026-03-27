@@ -50,7 +50,8 @@ export type HistoryData = {
   monthLabel: string;
   dayChips: HistoryDayChip[];
   activeMetric: 'temperature' | 'humidity';
-  trendPoints: WeatherTrendPoint[];
+  temperatureTrendPoints: WeatherTrendPoint[];
+  humidityTrendPoints: WeatherTrendPoint[];
   tooltipLabel: string;
   tooltipValue: string;
   records: HistoryRecord[];
@@ -152,12 +153,19 @@ const MOCK_HISTORY: HistoryData = {
     { id: '22', weekdayLabel: 'Sun', dayOfMonth: 22, state: 'range' },
   ],
   activeMetric: 'temperature',
-  trendPoints: [
+  temperatureTrendPoints: [
     { label: 'Oct 18', value: 20 },
     { label: 'Oct 19', value: 22 },
     { label: 'Oct 20', value: 21 },
     { label: 'Oct 21', value: 24 },
     { label: 'Oct 22', value: 26 },
+  ],
+    humidityTrendPoints: [
+    { label: 'Oct 18', value: 55 },
+    { label: 'Oct 19', value: 60 },
+    { label: 'Oct 20', value: 78 },
+    { label: 'Oct 21', value: 51 },
+    { label: 'Oct 22', value: 42 },
   ],
   tooltipLabel: 'Oct 21',
   tooltipValue: '24 C',
@@ -279,11 +287,19 @@ function iconFromHumidity(humidity: number): HistoryRecord['iconName'] {
   return 'sunny';
 }
 
-function buildTrendPoints(rowsAsc: WeatherReadingRow[], maxPoints: number): WeatherTrendPoint[] {
+function buildTemperatureTrendPoints(rowsAsc: WeatherReadingRow[], maxPoints: number): WeatherTrendPoint[] {
   const selectedRows = rowsAsc.slice(-maxPoints);
   return selectedRows.map((row, index) => ({
     label: index === selectedRows.length - 1 ? 'Now' : formatClockLabel(row.createdAt),
     value: roundOne(row.temperature),
+  }));
+}
+
+function buildHumidityTrendPoints(rowsAsc: WeatherReadingRow[], maxPoints: number): WeatherTrendPoint[] {
+  const selectedRows = rowsAsc.slice(-maxPoints);
+  return selectedRows.map((row, index) => ({
+    label: index === selectedRows.length - 1 ? 'Now' : formatClockLabel(row.createdAt),
+    value: roundOne(row.humidity),
   }));
 }
 
@@ -380,7 +396,7 @@ export async function fetchCurrentWeatherTemplate(): Promise<CurrentWeatherData>
   const latest = rowsDesc[0];
   const previous = rowsDesc[1] ?? latest;
   const rowsAsc = [...rowsDesc].reverse();
-  const trendPoints = buildTrendPoints(rowsAsc, 5);
+  const trendPoints = buildTemperatureTrendPoints(rowsAsc, 5);
   const deltaValue = roundOne(latest.temperature - previous.temperature);
   const deltaPrefix = deltaValue >= 0 ? '+' : '';
 
@@ -407,7 +423,7 @@ export async function fetchHistoryTemplate(): Promise<HistoryData> {
   }
 
   const rowsAsc = [...rowsDesc].reverse();
-  const trendPoints = buildTrendPoints(rowsAsc, 7);
+  const trendPoints = buildTemperatureTrendPoints(rowsAsc, 7);
   const latest = rowsDesc[0];
 
   const dayChipRows = rowsDesc.slice(0, 7).reverse();
@@ -439,7 +455,8 @@ export async function fetchHistoryTemplate(): Promise<HistoryData> {
     monthLabel: formatMonthLabel(latest.createdAt),
     dayChips: dayChips.length ? dayChips : MOCK_HISTORY.dayChips,
     activeMetric: 'temperature',
-    trendPoints: trendPoints.length ? trendPoints : MOCK_HISTORY.trendPoints,
+    temperatureTrendPoints: trendPoints.length ? trendPoints : MOCK_HISTORY.temperatureTrendPoints,
+    humidityTrendPoints: buildHumidityTrendPoints(rowsAsc, 7),
     tooltipLabel: latestTrend?.label ?? MOCK_HISTORY.tooltipLabel,
     tooltipValue: latestTrend ? `${latestTrend.value} C` : MOCK_HISTORY.tooltipValue,
     records: records.length ? records : MOCK_HISTORY.records,

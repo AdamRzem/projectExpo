@@ -78,7 +78,7 @@ export default function HistoryScreen() {
 
         const selectedChip = payload.dayChips.find((chip) => chip.state === 'selected');
         setSelectedDayId(selectedChip?.id ?? payload.dayChips[0]?.id ?? null);
-        setFocusedPointIndex(Math.max(0, payload.trendPoints.length - 2));
+        setFocusedPointIndex(Math.max(0, payload.temperatureTrendPoints.length - 2));
       } catch (caughtError) {
         if (!isMounted) {
           return;
@@ -110,7 +110,7 @@ export default function HistoryScreen() {
       return [];
     }
 
-    return activeMetric === 'temperature' ? data.trendPoints : buildHumidityTrend(data.trendPoints);
+    return activeMetric === 'temperature' ? data.temperatureTrendPoints : data.humidityTrendPoints;
   }, [activeMetric, data]);
 
   const focusedPoint = useMemo(() => {
