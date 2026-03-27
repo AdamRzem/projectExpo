@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 
 const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.PUBLIC_SUPABASE_URL;
@@ -13,11 +13,21 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
+const authConfig =
+  Platform.OS === 'web'
+    ? {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      }
+    : {
+        // Avoid loading AsyncStorage in web/SSR paths.
+        storage: require('@react-native-async-storage/async-storage').default,
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
+      };
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    storage: AsyncStorage,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
+  auth: authConfig,
 });
