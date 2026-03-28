@@ -14,7 +14,6 @@ import { WeatherTrendChart } from '@/components/weather-trend-chart';
 import {
   HistoryData,
   HistoryRecord,
-  WeatherTrendPoint,
   fetchHistoryTemplate,
   subscribeToNewWeatherRows,
 } from '@/lib/weather-data-template';
@@ -31,6 +30,10 @@ const COLORS = {
   outline: '#c1c6d7',
 };
 
+const CHART_VIEWBOX_WIDTH = 1600;
+const CHART_PADDING_X = 16;
+const TIMELINE_TOUCH_WIDTH = 56;
+
 function resolveRecordIcon(iconName: HistoryRecord['iconName']) {
   if (iconName === 'sunny') {
     return 'wb-sunny';
@@ -41,13 +44,6 @@ function resolveRecordIcon(iconName: HistoryRecord['iconName']) {
   }
 
   return 'grain';
-}
-
-function buildHumidityTrend(points: WeatherTrendPoint[]): WeatherTrendPoint[] {
-  return points.map((point, index) => ({
-    ...point,
-    value: 44 + index * 3,
-  }));
 }
 
 export default function HistoryScreen() {
@@ -76,9 +72,15 @@ export default function HistoryScreen() {
         setData(payload);
         setActiveMetric(payload.activeMetric);
 
-        const selectedChip = payload.dayChips.find((chip) => chip.state === 'selected');
-        setSelectedDayId(selectedChip?.id ?? payload.dayChips[0]?.id ?? null);
-        setFocusedPointIndex(Math.max(0, payload.temperatureTrendPoints.length - 2));
+        const defaultDayId = payload.selectedDayId ?? payload.dayChips[0]?.id ?? null;
+        setSelectedDayId(defaultDayId);
+
+        const selectedTrendSet = defaultDayId ? payload.trendsByDayId[defaultDayId] : null;
+        const defaultPoints =
+          payload.activeMetric === 'temperature'
+            ? selectedTrendSet?.temperatureTrendPoints ?? []
+            : selectedTrendSet?.humidityTrendPoints ?? [];
+        setFocusedPointIndex(Math.max(0, defaultPoints.length - 1));
       } catch (caughtError) {
         if (!isMounted) {
           return;
@@ -110,8 +112,35 @@ export default function HistoryScreen() {
       return [];
     }
 
-    return activeMetric === 'temperature' ? data.temperatureTrendPoints : data.humidityTrendPoints;
-  }, [activeMetric, data]);
+    const currentDayId = selectedDayId ?? data.selectedDayId;
+    const selectedTrendSet = data.trendsByDayId[currentDayId];
+    if (!selectedTrendSet) {
+      return [];
+    }
+
+    return activeMetric === 'temperature'
+      ? selectedTrendSet.temperatureTrendPoints
+      : selectedTrendSet.humidityTrendPoints;
+  }, [activeMetric, data, selectedDayId]);
+
+  const chartContentWidth = useMemo(() => Math.max(1000, chartPoints.length * 56), [chartPoints.length]);
+
+  const timelineAnchors = useMemo(() => {
+    if (!chartPoints.length) {
+      return [] as number[];
+    }
+
+    const horizontalPadding = (CHART_PADDING_X / CHART_VIEWBOX_WIDTH) * chartContentWidth;
+    const drawableWidth = Math.max(0, chartContentWidth - horizontalPadding * 2);
+
+    return chartPoints.map((_, pointIndex) => {
+      if (chartPoints.length === 1) {
+        return chartContentWidth / 2;
+      }
+
+      return horizontalPadding + (pointIndex / (chartPoints.length - 1)) * drawableWidth;
+    });
+  }, [chartContentWidth, chartPoints]);
 
   const focusedPoint = useMemo(() => {
     if (!chartPoints.length) {
@@ -163,7 +192,15 @@ export default function HistoryScreen() {
                   return (
                     <Pressable
                       key={chip.id}
-                      onPress={() => setSelectedDayId(chip.id)}
+                      onPress={() => {
+                        setSelectedDayId(chip.id);
+                        const selectedTrendSet = data.trendsByDayId[chip.id];
+                        const nextPoints =
+                          activeMetric === 'temperature'
+                            ? selectedTrendSet?.temperatureTrendPoints ?? []
+                            : selectedTrendSet?.humidityTrendPoints ?? [];
+                        setFocusedPointIndex(Math.max(0, nextPoints.length - 1));
+                      }}
                       style={[
                         styles.dayChip,
                         chip.state === 'inactive' ? styles.dayChipInactive : null,
@@ -223,29 +260,44 @@ export default function HistoryScreen() {
                   </Text>
                 </Pressable>
               </View>
-              <Text style={styles.trendTitle}>7-Day Trend</Text>
+              <Text style={styles.trendTitle}>24-Hour Trend</Text>
             </View>
 
             <View style={styles.chartCard}>
-              <WeatherTrendChart points={chartPoints} focusedIndex={focusedPointIndex} />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScrollContent}>
+                <View style={[styles.chartInnerWrap, { width: chartContentWidth }]}> 
+                  <WeatherTrendChart points={chartPoints} focusedIndex={focusedPointIndex} />
 
-              <View style={styles.timelineRow}>
-                {chartPoints.map((point, pointIndex) => {
-                  const isFocused = focusedPoint?.label === point.label;
+                  <View style={styles.timelineRow}>
+                    {chartPoints.map((point, pointIndex) => {
+                      const isFocused = focusedPoint?.label === point.label;
+                      const anchorX = timelineAnchors[pointIndex] ?? 0;
+                      const left = Math.max(
+                        0,
+                        Math.min(anchorX - TIMELINE_TOUCH_WIDTH / 2, chartContentWidth - TIMELINE_TOUCH_WIDTH)
+                      );
 
-                  return (
-                    <Pressable
-                      key={`${point.label}-${pointIndex}`}
-                      onPress={() => setFocusedPointIndex(pointIndex)}
-                      style={styles.timelineItem}
-                      hitSlop={6}>
-                      <Text style={[styles.timelineText, isFocused ? styles.timelineFocusedText : null]}>
-                        {point.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                      return (
+                        <Pressable
+                          key={`${point.label}-${pointIndex}`}
+                          onPress={() => setFocusedPointIndex(pointIndex)}
+                          style={[
+                            styles.timelineItem,
+                            {
+                              left,
+                              width: TIMELINE_TOUCH_WIDTH,
+                            },
+                          ]}
+                          hitSlop={6}>
+                          <Text style={[styles.timelineText, isFocused ? styles.timelineFocusedText : null]}>
+                            {point.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              </ScrollView>
 
               {focusedPoint ? (
                 <View style={styles.tooltipWrap}>
@@ -457,14 +509,21 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     position: 'relative',
   },
+  chartScrollContent: {
+    minWidth: '100%',
+  },
+  chartInnerWrap: {
+    minWidth: '100%',
+  },
   timelineRow: {
     marginTop: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 4,
+    height: 24,
+    position: 'relative',
   },
   timelineItem: {
+    position: 'absolute',
     paddingVertical: 4,
+    alignItems: 'center',
   },
   timelineText: {
     color: COLORS.textMuted,

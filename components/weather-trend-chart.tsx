@@ -19,9 +19,9 @@ type WeatherTrendChartProps = {
   showFocus?: boolean;
 };
 
-const VIEWBOX_WIDTH = 1000;
+const VIEWBOX_WIDTH = 1600;
 const VIEWBOX_HEIGHT = 300;
-const PADDING_X = 32;
+const PADDING_X = 16;
 const PADDING_Y = 24;
 
 function toChartPoints(points: WeatherTrendPoint[]): ChartPoint[] {

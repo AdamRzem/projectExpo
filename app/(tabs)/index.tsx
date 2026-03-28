@@ -30,6 +30,10 @@ const COLORS = {
   outline: '#c1c6d7',
 };
 
+const CHART_VIEWBOX_WIDTH = 1600;
+const CHART_PADDING_X = 0;
+const TIMELINE_TOUCH_WIDTH = 56;
+
 function HeroWeatherOrb() {
   return (
     <View style={styles.heroOrbWrap}>
@@ -61,7 +65,7 @@ export default function CurrentWeatherDashboardScreen() {
         }
 
         setData(payload);
-        setFocusedPointIndex(Math.max(0, payload.trendPoints.length - 2));
+        setFocusedPointIndex(Math.max(0, payload.trendPoints.length - 1));
       } catch (caughtError) {
         if (!isMounted) {
           return;
@@ -96,6 +100,26 @@ export default function CurrentWeatherDashboardScreen() {
     const safeIndex = Math.max(0, Math.min(focusedPointIndex, data.trendPoints.length - 1));
     return data.trendPoints[safeIndex];
   }, [data, focusedPointIndex]);
+
+  const chartContentWidth = useMemo(() => Math.max(1000, (data?.trendPoints.length ?? 0) * 56), [data]);
+
+  const timelineAnchors = useMemo(() => {
+    const points = data?.trendPoints ?? [];
+    if (!points.length) {
+      return [] as number[];
+    }
+
+    const horizontalPadding = (CHART_PADDING_X / CHART_VIEWBOX_WIDTH) * chartContentWidth;
+    const drawableWidth = Math.max(0, chartContentWidth - horizontalPadding * 2);
+
+    return points.map((_, pointIndex) => {
+      if (points.length === 1) {
+        return chartContentWidth / 2;
+      }
+
+      return horizontalPadding + (pointIndex / (points.length - 1)) * drawableWidth;
+    });
+  }, [chartContentWidth, data]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -150,30 +174,45 @@ export default function CurrentWeatherDashboardScreen() {
             <View style={styles.cardLargeHeader}>
               <View>
                 <Text style={styles.cardLargeTitle}>Temperature Trend</Text>
-                <Text style={styles.cardLargeSubtitle}>Past 24 hours</Text>
+                <Text style={styles.cardLargeSubtitle}>Today: 00 to now</Text>
               </View>
               <Text style={styles.deltaText}>{data.trendDeltaLabel}</Text>
             </View>
 
-            <WeatherTrendChart points={data.trendPoints} focusedIndex={focusedPointIndex} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScrollContent}>
+              <View style={[styles.chartInnerWrap, { width: chartContentWidth }]}> 
+                <WeatherTrendChart points={data.trendPoints} focusedIndex={focusedPointIndex} />
 
-            <View style={styles.timelineRow}>
-              {data.trendPoints.map((point, pointIndex) => {
-                const isFocused = selectedTrendPoint?.label === point.label;
+                <View style={styles.timelineRow}>
+                  {data.trendPoints.map((point, pointIndex) => {
+                    const isFocused = selectedTrendPoint?.label === point.label;
+                    const anchorX = timelineAnchors[pointIndex] ?? 0;
+                    const left = Math.max(
+                      0,
+                      Math.min(anchorX - TIMELINE_TOUCH_WIDTH / 2, chartContentWidth - TIMELINE_TOUCH_WIDTH)
+                    );
 
-                return (
-                  <Pressable
-                    key={point.label}
-                    onPress={() => setFocusedPointIndex(pointIndex)}
-                    style={styles.timelineItem}
-                    hitSlop={6}>
-                    <Text style={[styles.timelineLabel, isFocused ? styles.timelineLabelFocused : null]}>
-                      {point.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
+                    return (
+                      <Pressable
+                        key={`${point.label}-${pointIndex}`}
+                        onPress={() => setFocusedPointIndex(pointIndex)}
+                        style={[
+                          styles.timelineItem,
+                          {
+                            left,
+                            width: TIMELINE_TOUCH_WIDTH,
+                          },
+                        ]}
+                        hitSlop={6}>
+                        <Text style={[styles.timelineLabel, isFocused ? styles.timelineLabelFocused : null]}>
+                          {point.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </ScrollView>
 
             {selectedTrendPoint ? (
               <Text style={styles.focusValueText}>
@@ -389,12 +428,19 @@ const styles = StyleSheet.create({
   },
   timelineRow: {
     marginTop: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 4,
+    height: 24,
+    position: 'relative',
+  },
+  chartScrollContent: {
+    minWidth: '100%',
+  },
+  chartInnerWrap: {
+    minWidth: '100%',
   },
   timelineItem: {
+    position: 'absolute',
     paddingVertical: 4,
+    alignItems: 'center',
   },
   timelineLabel: {
     color: COLORS.textMuted,

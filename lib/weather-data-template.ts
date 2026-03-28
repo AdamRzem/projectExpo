@@ -49,9 +49,15 @@ export type HistoryRecord = {
 export type HistoryData = {
   monthLabel: string;
   dayChips: HistoryDayChip[];
+  selectedDayId: string;
   activeMetric: 'temperature' | 'humidity';
-  temperatureTrendPoints: WeatherTrendPoint[];
-  humidityTrendPoints: WeatherTrendPoint[];
+  trendsByDayId: Record<
+    string,
+    {
+      temperatureTrendPoints: WeatherTrendPoint[];
+      humidityTrendPoints: WeatherTrendPoint[];
+    }
+  >;
   tooltipLabel: string;
   tooltipValue: string;
   records: HistoryRecord[];
@@ -152,21 +158,26 @@ const MOCK_HISTORY: HistoryData = {
     { id: '21', weekdayLabel: 'Sat', dayOfMonth: 21, state: 'range' },
     { id: '22', weekdayLabel: 'Sun', dayOfMonth: 22, state: 'range' },
   ],
+  selectedDayId: '22',
   activeMetric: 'temperature',
-  temperatureTrendPoints: [
-    { label: 'Oct 18', value: 20 },
-    { label: 'Oct 19', value: 22 },
-    { label: 'Oct 20', value: 21 },
-    { label: 'Oct 21', value: 24 },
-    { label: 'Oct 22', value: 26 },
-  ],
-    humidityTrendPoints: [
-    { label: 'Oct 18', value: 55 },
-    { label: 'Oct 19', value: 60 },
-    { label: 'Oct 20', value: 78 },
-    { label: 'Oct 21', value: 51 },
-    { label: 'Oct 22', value: 42 },
-  ],
+  trendsByDayId: {
+    '22': {
+      temperatureTrendPoints: [
+        { label: '12 AM', value: 18 },
+        { label: '6 AM', value: 19 },
+        { label: '12 PM', value: 24 },
+        { label: '6 PM', value: 22 },
+        { label: '11 PM', value: 21 },
+      ],
+      humidityTrendPoints: [
+        { label: '12 AM', value: 68 },
+        { label: '6 AM', value: 64 },
+        { label: '12 PM', value: 49 },
+        { label: '6 PM', value: 57 },
+        { label: '11 PM', value: 61 },
+      ],
+    },
+  },
   tooltipLabel: 'Oct 21',
   tooltipValue: '24 C',
   records: [
@@ -216,6 +227,38 @@ function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+function toDayKey(dateValue: Date): string {
+  const year = dateValue.getFullYear();
+  const month = (dateValue.getMonth() + 1).toString().padStart(2, '0');
+  const day = dateValue.getDate().toString().padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(dateValue: Date): Date {
+  const date = new Date(dateValue);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addLocalDays(dateValue: Date, days: number): Date {
+  const date = new Date(dateValue);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function formatHourLabel(hour: number): string {
+  if (hour === 0) {
+    return '12 AM';
+  }
+  if (hour === 12) {
+    return '12 PM';
+  }
+  if (hour < 12) {
+    return `${hour} AM`;
+  }
+  return `${hour - 12} PM`;
+}
+
 function toSafeNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -229,38 +272,52 @@ function parseDate(value: string): Date {
   return parsedDate;
 }
 
-function formatClockLabel(dateValue: string): string {
-  const date = parseDate(dateValue);
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  if (hours === 0 && minutes === 0) {
-    return '12 AM';
+function parseTimestampParts(value: string): { dayKey: string; hour: number } | null {
+  const normalizedValue = value.trim().replace(' ', 'T');
+  const match = normalizedValue.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})/);
+
+  if (!match) {
+    return null;
   }
-  if (hours === 12 && minutes === 0) {
-    return '12 PM';
-  }
-  if (minutes === 0) {
-    if (hours === 0) {
-      return '12 AM';
-    }
-    if (hours < 12) {
-      return `${hours} AM`;
-    }
-    return `${hours - 12} PM`;
-  }
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+
+  const [, year, month, day, hourToken] = match;
+  const parsedHour = Number(hourToken);
+  const safeHour = Number.isFinite(parsedHour) ? Math.max(0, Math.min(23, parsedHour)) : 0;
+
+  return {
+    dayKey: `${year}-${month}-${day}`,
+    hour: safeHour,
+  };
 }
 
-function formatWeekday(dateValue: string): string {
-  return parseDate(dateValue).toLocaleDateString('en-US', { weekday: 'short' });
+function getRowDayKey(createdAt: string): string {
+  const parsed = parseTimestampParts(createdAt);
+  if (parsed) {
+    return parsed.dayKey;
+  }
+
+  return toDayKey(parseDate(createdAt));
 }
 
-function formatMonthLabel(dateValue: string): string {
-  return parseDate(dateValue).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+function getRowHour(createdAt: string): number {
+  const parsed = parseTimestampParts(createdAt);
+  if (parsed) {
+    return parsed.hour;
+  }
+
+  return parseDate(createdAt).getHours();
 }
 
-function formatRecordDate(dateValue: string): string {
-  return parseDate(dateValue).toLocaleDateString('en-US', {
+function formatWeekday(dateValue: Date): string {
+  return dateValue.toLocaleDateString('en-US', { weekday: 'short' });
+}
+
+function formatMonthLabel(dateValue: Date): string {
+  return dateValue.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function formatRecordDate(dateValue: Date): string {
+  return dateValue.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
@@ -287,33 +344,129 @@ function iconFromHumidity(humidity: number): HistoryRecord['iconName'] {
   return 'sunny';
 }
 
-function buildTemperatureTrendPoints(rowsAsc: WeatherReadingRow[], maxPoints: number): WeatherTrendPoint[] {
-  const selectedRows = rowsAsc.slice(-maxPoints);
-  return selectedRows.map((row, index) => ({
-    label: index === selectedRows.length - 1 ? 'Now' : formatClockLabel(row.createdAt),
-    value: roundOne(row.temperature),
+function buildLatestRowsByHour(rowsDesc: WeatherReadingRow[]): Map<number, WeatherReadingRow> {
+  const latestByHour = new Map<number, WeatherReadingRow>();
+
+  rowsDesc.forEach((row) => {
+    const hour = getRowHour(row.createdAt);
+    if (!latestByHour.has(hour)) {
+      latestByHour.set(hour, row);
+    }
+  });
+
+  return latestByHour;
+}
+
+function backfillHourlySeries(values: (number | null)[]): number[] {
+  const copied = [...values];
+
+  const firstKnownValue = copied.find((value): value is number => value !== null) ?? 0;
+
+  // Fill any leading gaps with the first observed value for the period.
+  for (let index = 0; index < copied.length; index += 1) {
+    if (copied[index] === null) {
+      copied[index] = firstKnownValue;
+      continue;
+    }
+    break;
+  }
+
+  let previousValue: number | null = null;
+  for (let index = 0; index < copied.length; index += 1) {
+    if (copied[index] !== null) {
+      previousValue = copied[index];
+    } else if (previousValue !== null) {
+      copied[index] = previousValue;
+    }
+  }
+
+  return copied.map((value) => roundOne(value ?? 0));
+}
+
+function buildHourlyTrendPoints(
+  rowsDesc: WeatherReadingRow[],
+  endHour: number,
+  metric: 'temperature' | 'humidity',
+  markLastAsNow: boolean
+): WeatherTrendPoint[] {
+  const latestByHour = buildLatestRowsByHour(rowsDesc);
+  const rawSeries: (number | null)[] = [];
+
+  for (let hour = 0; hour <= endHour; hour += 1) {
+    const row = latestByHour.get(hour);
+    rawSeries.push(row ? row[metric] : null);
+  }
+
+  const values = backfillHourlySeries(rawSeries);
+
+  return values.map((value, index) => ({
+    label: markLastAsNow && index === values.length - 1 ? 'Now' : formatHourLabel(index),
+    value,
   }));
 }
 
-function buildHumidityTrendPoints(rowsAsc: WeatherReadingRow[], maxPoints: number): WeatherTrendPoint[] {
-  const selectedRows = rowsAsc.slice(-maxPoints);
-  return selectedRows.map((row, index) => ({
-    label: index === selectedRows.length - 1 ? 'Now' : formatClockLabel(row.createdAt),
-    value: roundOne(row.humidity),
-  }));
+function filterRowsForDay(rowsDesc: WeatherReadingRow[], dayStart: Date): WeatherReadingRow[] {
+  const targetDayKey = toDayKey(dayStart);
+  return rowsDesc.filter((row) => getRowDayKey(row.createdAt) === targetDayKey);
 }
 
-async function fetchWeatherRows(limit: number): Promise<WeatherReadingRow[]> {
+function toDayChip(dayStart: Date, selectedDayId: string): HistoryDayChip {
+  const dayKey = toDayKey(dayStart);
+  return {
+    id: dayKey,
+    weekdayLabel: formatWeekday(dayStart),
+    dayOfMonth: dayStart.getDate(),
+    state: dayKey === selectedDayId ? 'selected' : 'range',
+  };
+}
+
+function buildDailyRecord(dayStart: Date, rowsDesc: WeatherReadingRow[]): HistoryRecord {
+  const dayKey = toDayKey(dayStart);
+
+  if (!rowsDesc.length) {
+    return {
+      id: dayKey,
+      dateLabel: formatRecordDate(dayStart),
+      summaryLabel: 'No readings captured',
+      highTemp: 0,
+      lowTemp: 0,
+      humidityPercent: 0,
+      iconName: 'partly_cloudy',
+    };
+  }
+
+  const temperatures = rowsDesc.map((row) => row.temperature);
+  const averageHumidity = rowsDesc.reduce((sum, row) => sum + row.humidity, 0) / rowsDesc.length;
+
+  return {
+    id: dayKey,
+    dateLabel: formatRecordDate(dayStart),
+    summaryLabel: humiditySummary(averageHumidity),
+    highTemp: Math.round(Math.max(...temperatures)),
+    lowTemp: Math.round(Math.min(...temperatures)),
+    humidityPercent: Math.round(averageHumidity),
+    iconName: iconFromHumidity(averageHumidity),
+  };
+}
+
+async function fetchWeatherRows(options: { limit: number; sinceIso?: string }): Promise<WeatherReadingRow[]> {
   const tableName = WEATHER_DB_TEMPLATE.tables.weatherReadings;
   const fields = WEATHER_DB_TEMPLATE.fields.weatherReadings;
+  const { limit, sinceIso } = options;
 
   // TODO(DB_TABLE): Change tableName if your weather table has a different name.
   // TODO(DB_FIELDS): Change fields.createdAt / fields.temperature / fields.humidity to match your schema.
-  const { data, error } = await supabase
+  let query = supabase
     .from(tableName)
-    .select(`${fields.createdAt},${fields.temperature},${fields.humidity}`)
-    .order(fields.createdAt, { ascending: false })
-    .limit(limit);
+    .select(`${fields.createdAt},${fields.temperature},${fields.humidity}`);
+
+  if (sinceIso) {
+    query = query.gte(fields.createdAt, sinceIso);
+  }
+
+  query = query.order(fields.createdAt, { ascending: false }).limit(limit);
+
+  const { data, error } = await query;
 
   if (error) {
     throw new Error(error.message);
@@ -387,16 +540,30 @@ export function subscribeToNewWeatherRows(
 }
 
 export async function fetchCurrentWeatherTemplate(): Promise<CurrentWeatherData> {
-  const rowsDesc = await fetchWeatherRows(24);
+  const todayStart = startOfLocalDay(new Date());
+  const currentHour = new Date().getHours();
+  const rowsDesc = await fetchWeatherRows({
+    limit: 1000,
+    sinceIso: todayStart.toISOString(),
+  });
 
   if (!rowsDesc.length) {
     return MOCK_CURRENT_WEATHER;
   }
 
-  const latest = rowsDesc[0];
-  const previous = rowsDesc[1] ?? latest;
-  const rowsAsc = [...rowsDesc].reverse();
-  const trendPoints = buildTemperatureTrendPoints(rowsAsc, 5);
+  const rowsForToday = filterRowsForDay(rowsDesc, todayStart);
+  if (!rowsForToday.length) {
+    return MOCK_CURRENT_WEATHER;
+  }
+
+  const latestByHour = buildLatestRowsByHour(rowsForToday);
+  const hourlyRowsAsc = Array.from(latestByHour.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([, row]) => row);
+
+  const latest = hourlyRowsAsc[hourlyRowsAsc.length - 1] ?? rowsForToday[0];
+  const previous = hourlyRowsAsc[hourlyRowsAsc.length - 2] ?? latest;
+  const trendPoints = buildHourlyTrendPoints(rowsForToday, currentHour, 'temperature', true);
   const deltaValue = roundOne(latest.temperature - previous.temperature);
   const deltaPrefix = deltaValue >= 0 ? '+' : '';
 
@@ -416,50 +583,59 @@ export async function fetchCurrentWeatherTemplate(): Promise<CurrentWeatherData>
 }
 
 export async function fetchHistoryTemplate(): Promise<HistoryData> {
-  const rowsDesc = await fetchWeatherRows(96);
+  const todayStart = startOfLocalDay(new Date());
+  const oldestDayStart = addLocalDays(todayStart, -6);
+  const rowsDesc = await fetchWeatherRows({
+    limit: 1000,
+    sinceIso: oldestDayStart.toISOString(),
+  });
 
-  if (!rowsDesc.length) {
-    return MOCK_HISTORY;
-  }
+  const selectedDayId = toDayKey(todayStart);
 
-  const rowsAsc = [...rowsDesc].reverse();
-  const trendPoints = buildTemperatureTrendPoints(rowsAsc, 7);
-  const latest = rowsDesc[0];
+  const dayStarts = Array.from({ length: 7 }, (_, index) => addLocalDays(oldestDayStart, index));
+  const trendsByDayId: HistoryData['trendsByDayId'] = {};
 
-  const dayChipRows = rowsDesc.slice(0, 7).reverse();
-  const dayChips: HistoryDayChip[] = dayChipRows.map((row, index) => {
-    const rowDate = parseDate(row.createdAt);
-    const isSelected = index === dayChipRows.length - 1;
+  dayStarts.forEach((dayStart) => {
+    const dayKey = toDayKey(dayStart);
+    const rowsForDay = filterRowsForDay(rowsDesc, dayStart);
 
-    return {
-      id: `${row.createdAt}-${index}`,
-      weekdayLabel: formatWeekday(row.createdAt),
-      dayOfMonth: rowDate.getDate(),
-      state: isSelected ? 'selected' : 'range',
+    trendsByDayId[dayKey] = {
+      temperatureTrendPoints: buildHourlyTrendPoints(rowsForDay, 23, 'temperature', false),
+      humidityTrendPoints: buildHourlyTrendPoints(rowsForDay, 23, 'humidity', false),
     };
   });
 
-  const records: HistoryRecord[] = rowsDesc.slice(0, 3).map((row, index) => ({
-    id: `${row.createdAt}-${index}`,
-    dateLabel: formatRecordDate(row.createdAt),
-    summaryLabel: humiditySummary(row.humidity),
-    highTemp: Math.round(row.temperature),
-    lowTemp: Math.round(row.temperature),
-    humidityPercent: Math.round(row.humidity),
-    iconName: iconFromHumidity(row.humidity),
-  }));
+  const dayChips = dayStarts.map((dayStart) => toDayChip(dayStart, selectedDayId));
 
-  const latestTrend = trendPoints[trendPoints.length - 1];
+  const records = [1, 2, 3].map((dayOffset) => {
+    const dayStart = addLocalDays(todayStart, -dayOffset);
+    const rowsForDay = filterRowsForDay(rowsDesc, dayStart);
+    return buildDailyRecord(dayStart, rowsForDay);
+  });
+
+  const selectedDayTrends = trendsByDayId[selectedDayId];
+  const latestTrend = selectedDayTrends?.temperatureTrendPoints[selectedDayTrends.temperatureTrendPoints.length - 1];
+
+  if (!rowsDesc.length) {
+    return {
+      ...MOCK_HISTORY,
+      dayChips,
+      selectedDayId,
+      trendsByDayId,
+      records,
+      monthLabel: formatMonthLabel(todayStart),
+    };
+  }
 
   return {
-    monthLabel: formatMonthLabel(latest.createdAt),
-    dayChips: dayChips.length ? dayChips : MOCK_HISTORY.dayChips,
+    monthLabel: formatMonthLabel(todayStart),
+    dayChips,
+    selectedDayId,
     activeMetric: 'temperature',
-    temperatureTrendPoints: trendPoints.length ? trendPoints : MOCK_HISTORY.temperatureTrendPoints,
-    humidityTrendPoints: buildHumidityTrendPoints(rowsAsc, 7),
+    trendsByDayId,
     tooltipLabel: latestTrend?.label ?? MOCK_HISTORY.tooltipLabel,
     tooltipValue: latestTrend ? `${latestTrend.value} C` : MOCK_HISTORY.tooltipValue,
-    records: records.length ? records : MOCK_HISTORY.records,
+    records,
   };
 }
 
