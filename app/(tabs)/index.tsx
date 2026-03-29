@@ -33,12 +33,25 @@ const COLORS = {
 const CHART_VIEWBOX_WIDTH = 1600;
 const CHART_PADDING_X = 0;
 const TIMELINE_TOUCH_WIDTH = 56;
+const CHART_HEIGHT = 256;
 
-function HeroWeatherOrb() {
+type ChartScale = {
+  max: string;
+  mid: string;
+  min: string;
+};
+
+function formatScaleValue(value: number, unit: string): string {
+  const rounded = Math.round(value * 10) / 10;
+  const valueLabel = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+  return `${valueLabel}${unit}`;
+}
+
+function HeroWeatherOrb({ iconName }: { iconName: CurrentWeatherData['weatherIconName'] }) {
   return (
     <View style={styles.heroOrbWrap}>
       <View style={styles.heroOrbGlow} />
-      <MaterialIcons name="wb-cloudy" size={116} color={COLORS.primary} />
+      <MaterialIcons name={iconName} size={116} color={COLORS.primary} />
     </View>
   );
 }
@@ -121,6 +134,25 @@ export default function CurrentWeatherDashboardScreen() {
     });
   }, [chartContentWidth, data]);
 
+  const chartScale = useMemo<ChartScale | null>(() => {
+    const points = data?.trendPoints ?? [];
+    if (!points.length) {
+      return null;
+    }
+
+    const values = points.map((point) => point.value);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const mid = (min + max) / 2;
+    const unit = data?.temperatureUnit ?? '';
+
+    return {
+      max: formatScaleValue(max, unit),
+      mid: formatScaleValue(mid, unit),
+      min: formatScaleValue(min, unit),
+    };
+  }, [data]);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.header}>
@@ -167,52 +199,62 @@ export default function CurrentWeatherDashboardScreen() {
                 </View>
               </View>
             </View>
-            <HeroWeatherOrb />
+            <HeroWeatherOrb iconName={data.weatherIconName} />
           </View>
 
           <View style={styles.cardLarge}>
             <View style={styles.cardLargeHeader}>
               <View>
                 <Text style={styles.cardLargeTitle}>Temperature Trend</Text>
-                <Text style={styles.cardLargeSubtitle}>Today: 00 to now</Text>
+                <Text style={styles.cardLargeSubtitle}>Today: 12am to now</Text>
               </View>
               <Text style={styles.deltaText}>{data.trendDeltaLabel}</Text>
             </View>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScrollContent}>
-              <View style={[styles.chartInnerWrap, { width: chartContentWidth }]}> 
-                <WeatherTrendChart points={data.trendPoints} focusedIndex={focusedPointIndex} />
+            <View style={styles.chartViewport}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScrollContent}>
+                <View style={[styles.chartInnerWrap, { width: chartContentWidth }]}> 
+                  <WeatherTrendChart points={data.trendPoints} focusedIndex={focusedPointIndex} />
 
-                <View style={styles.timelineRow}>
-                  {data.trendPoints.map((point, pointIndex) => {
-                    const isFocused = selectedTrendPoint?.label === point.label;
-                    const anchorX = timelineAnchors[pointIndex] ?? 0;
-                    const left = Math.max(
-                      0,
-                      Math.min(anchorX - TIMELINE_TOUCH_WIDTH / 2, chartContentWidth - TIMELINE_TOUCH_WIDTH)
-                    );
+                  <View style={styles.timelineRow}>
+                    {data.trendPoints.map((point, pointIndex) => {
+                      const isFocused = selectedTrendPoint?.label === point.label;
+                      const anchorX = timelineAnchors[pointIndex] ?? 0;
+                      const left = Math.max(
+                        0,
+                        Math.min(anchorX - TIMELINE_TOUCH_WIDTH / 2, chartContentWidth - TIMELINE_TOUCH_WIDTH)
+                      );
 
-                    return (
-                      <Pressable
-                        key={`${point.label}-${pointIndex}`}
-                        onPress={() => setFocusedPointIndex(pointIndex)}
-                        style={[
-                          styles.timelineItem,
-                          {
-                            left,
-                            width: TIMELINE_TOUCH_WIDTH,
-                          },
-                        ]}
-                        hitSlop={6}>
-                        <Text style={[styles.timelineLabel, isFocused ? styles.timelineLabelFocused : null]}>
-                          {point.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+                      return (
+                        <Pressable
+                          key={`${point.label}-${pointIndex}`}
+                          onPress={() => setFocusedPointIndex(pointIndex)}
+                          style={[
+                            styles.timelineItem,
+                            {
+                              left,
+                              width: TIMELINE_TOUCH_WIDTH,
+                            },
+                          ]}
+                          hitSlop={6}>
+                          <Text style={[styles.timelineLabel, isFocused ? styles.timelineLabelFocused : null]}>
+                            {point.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
                 </View>
-              </View>
-            </ScrollView>
+              </ScrollView>
+
+              {chartScale ? (
+                <View pointerEvents="none" style={styles.chartScaleOverlay}>
+                  <Text style={styles.chartScaleLabel}>{chartScale.max}</Text>
+                  <Text style={styles.chartScaleLabel}>{chartScale.mid}</Text>
+                  <Text style={styles.chartScaleLabel}>{chartScale.min}</Text>
+                </View>
+              ) : null}
+            </View>
 
             {selectedTrendPoint ? (
               <Text style={styles.focusValueText}>
@@ -260,8 +302,8 @@ export default function CurrentWeatherDashboardScreen() {
                 <Text style={styles.gridCardValueSuffix}>{data.pressureUnit}</Text>
               </View>
               <View style={styles.statusWrap}>
-                <MaterialIcons name="arrow-upward" size={12} color={COLORS.primary} />
-                <Text style={styles.statusText}>Rising Stable</Text>
+                {/* <MaterialIcons name="arrow-upward" size={12} color={COLORS.primary} /> */}
+                {/* <Text style={styles.statusText}>Rising Stable</Text> */}
               </View>
             </View>
           </View>
@@ -431,11 +473,30 @@ const styles = StyleSheet.create({
     height: 24,
     position: 'relative',
   },
+  chartViewport: {
+    position: 'relative',
+  },
   chartScrollContent: {
     minWidth: '100%',
   },
   chartInnerWrap: {
     minWidth: '100%',
+  },
+  chartScaleOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: '100%',
+    height: CHART_HEIGHT,
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    transform: [{ translateX: -16 }],
+  },
+  chartScaleLabel: {
+    color: '#8f95a3',
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
   timelineItem: {
     position: 'absolute',

@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { fetchWeatherApi } from 'openmeteo';
 
 export type WeatherTrendPoint = {
   label: string;
@@ -11,11 +12,14 @@ export type WeatherInsertEvent = {
   humidity: number;
 };
 
+export type DashboardWeatherIconName = 'wb-sunny' | 'wb-cloudy' | 'cloud-queue' | 'cloud';
+
 export type CurrentWeatherData = {
   locationLabel: string;
   temperatureValue: number;
   temperatureUnit: 'C' | 'F';
   humidityPercent: number;
+  weatherIconName: DashboardWeatherIconName;
   windSpeedValue: number;
   windSpeedUnit: string;
   windDirection: string;
@@ -127,6 +131,7 @@ const MOCK_CURRENT_WEATHER: CurrentWeatherData = {
   temperatureValue: 22,
   temperatureUnit: 'C',
   humidityPercent: 45,
+  weatherIconName: 'wb-cloudy',
   windSpeedValue: 12,
   windSpeedUnit: 'km/h',
   windDirection: 'NW',
@@ -223,6 +228,39 @@ const MOCK_SETTINGS: SettingsData = {
     'https://lh3.googleusercontent.com/aida-public/AB6AXuBTuisa4tY0Q2AWNxu8BGJc0ndjYrlVXuCSBO-KSmjE5wkcmxM2vdhVGaglw9D3pK0ZCdSKRvlF4DxxBifKkfVjQeApLJouE3vtg2pJvvwWkLTgOQO3EqjhChzNgQLCEQEU51BmcENT18jf7mpMeK3Q32Y2WakLT10muQpFEhQxmnph_H98_AM4EXC15xngcYjLt-g36q666EKVeWEADcjVKRlaxAs_2Ip3oyEAtjkyauysVqe81HwsZOQkOqnlVKx4tNnB5DvMeVrY',
 };
 
+const OPEN_METEO_DASHBOARD_FORECAST = {
+  latitude: 49.630615,
+  longitude: 20.93517,
+  timezone: 'Europe/Warsaw',
+  forecastDays: 1,
+} as const;
+
+const OPEN_METEO_CACHE_TTL_MS = 10 * 60 * 1000;
+const CLOUD_ICON_THRESHOLDS = {
+  sunnyMaxPercent: 15,
+  partlyCloudyMaxPercent: 50,
+} as const;
+
+type OpenMeteoDashboardForecast = {
+  temperatureValue: number;
+  humidityPercent: number;
+  windSpeedValue: number;
+  windDirection: string;
+  pressureValue: number;
+  uvIndexValue: number;
+  uvIndexLabel: string;
+  trendDeltaLabel: string;
+  trendPoints: WeatherTrendPoint[];
+  cloudCoverPercent: number;
+};
+
+let openMeteoDashboardCache:
+  | {
+      expiresAt: number;
+      value: OpenMeteoDashboardForecast;
+    }
+  | null = null;
+
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
 }
@@ -262,6 +300,197 @@ function formatHourLabel(hour: number): string {
 function toSafeNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function resolveDashboardIconName(cloudCoverPercent: number): DashboardWeatherIconName {
+  if (cloudCoverPercent < CLOUD_ICON_THRESHOLDS.sunnyMaxPercent) {
+    return 'wb-sunny';
+  }
+
+  if (cloudCoverPercent <= CLOUD_ICON_THRESHOLDS.partlyCloudyMaxPercent) {
+    return 'cloud-queue';
+  }
+
+  return 'wb-cloudy';
+}
+
+function uvIndexToLabel(uvIndexValue: number): string {
+  if (uvIndexValue < 3) {
+    return 'Low';
+  }
+
+  if (uvIndexValue < 6) {
+    return 'Moderate';
+  }
+
+  if (uvIndexValue < 8) {
+    return 'High';
+  }
+
+  if (uvIndexValue < 11) {
+    return 'Very High';
+  }
+
+  return 'Extreme';
+}
+
+function degreesToWindDirectionLabel(directionDegrees: number): string {
+  const compassLabels = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const normalized = ((directionDegrees % 360) + 360) % 360;
+  const directionIndex = Math.round(normalized / 45) % compassLabels.length;
+  return compassLabels[directionIndex];
+}
+
+function valueAtIndex(values: Float32Array | null | undefined, index: number, fallback: number): number {
+  if (!values || values.length === 0) {
+    return fallback;
+  }
+
+  const safeIndex = clamp(index, 0, values.length - 1);
+  const candidate = values[safeIndex];
+  return Number.isFinite(candidate) ? candidate : fallback;
+}
+
+function getCurrentHourInWarsaw(): number {
+  const hourToken = new Intl.DateTimeFormat('en-GB', {
+    hour: '2-digit',
+    hour12: false,
+    timeZone: OPEN_METEO_DASHBOARD_FORECAST.timezone,
+  }).format(new Date());
+
+  const parsedHour = Number(hourToken);
+  return Number.isFinite(parsedHour) ? clamp(parsedHour, 0, 23) : 0;
+}
+
+function buildOpenMeteoTrendPoints(
+  temperatureSeries: Float32Array | null | undefined,
+  currentHour: number
+): WeatherTrendPoint[] {
+  const anchorHours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23].filter((hour) => hour < currentHour);
+  const hours = [...anchorHours, currentHour];
+
+  return hours.map((hour, index) => ({
+    label: index === hours.length - 1 ? 'Now' : formatHourLabel(hour),
+    value: roundOne(valueAtIndex(temperatureSeries, hour, MOCK_CURRENT_WEATHER.temperatureValue)),
+  }));
+}
+
+async function fetchOpenMeteoDashboardForecast(): Promise<OpenMeteoDashboardForecast | null> {
+  const now = Date.now();
+  if (openMeteoDashboardCache && openMeteoDashboardCache.expiresAt > now) {
+    return openMeteoDashboardCache.value;
+  }
+
+  const params = {
+    latitude: OPEN_METEO_DASHBOARD_FORECAST.latitude,
+    longitude: OPEN_METEO_DASHBOARD_FORECAST.longitude,
+    daily: 'uv_index_max',
+    hourly: [
+      'temperature_2m',
+      'relative_humidity_2m',
+      'wind_speed_10m',
+      'wind_direction_10m',
+      'surface_pressure',
+      'cloud_cover',
+    ],
+    timezone: OPEN_METEO_DASHBOARD_FORECAST.timezone,
+    forecast_days: OPEN_METEO_DASHBOARD_FORECAST.forecastDays,
+  };
+
+  try {
+    const responses = await fetchWeatherApi(EXTRA_WEATHER_API_TEMPLATE.endpoint, params);
+    const response = responses[0];
+    if (!response) {
+      return null;
+    }
+
+    const hourly = response.hourly();
+    const daily = response.daily();
+    if (!hourly || !daily) {
+      return null;
+    }
+
+    const currentWarsawHour = getCurrentHourInWarsaw();
+    const temperatureSeries = hourly.variables(0)?.valuesArray();
+    const humiditySeries = hourly.variables(1)?.valuesArray();
+    const windSpeedSeries = hourly.variables(2)?.valuesArray();
+    const windDirectionSeries = hourly.variables(3)?.valuesArray();
+    const pressureSeries = hourly.variables(4)?.valuesArray();
+    const cloudCoverSeries = hourly.variables(5)?.valuesArray();
+    const dailyUvSeries = daily.variables(0)?.valuesArray();
+
+    const temperatureValue = roundOne(
+      valueAtIndex(temperatureSeries, currentWarsawHour, MOCK_CURRENT_WEATHER.temperatureValue)
+    );
+    const previousTemperatureValue = roundOne(
+      valueAtIndex(
+        temperatureSeries,
+        Math.max(0, currentWarsawHour - 1),
+        MOCK_CURRENT_WEATHER.temperatureValue
+      )
+    );
+    const deltaValue = roundOne(temperatureValue - previousTemperatureValue);
+    const deltaPrefix = deltaValue >= 0 ? '+' : '';
+    const windDirectionDegrees = valueAtIndex(
+      windDirectionSeries,
+      currentWarsawHour,
+      315
+    );
+    const cloudCoverPercent = Math.round(
+      clamp(valueAtIndex(cloudCoverSeries, currentWarsawHour, 50), 0, 100)
+    );
+    const uvIndexValue = roundOne(valueAtIndex(dailyUvSeries, 0, MOCK_CURRENT_WEATHER.uvIndexValue));
+
+    const forecast: OpenMeteoDashboardForecast = {
+      temperatureValue,
+      humidityPercent: Math.round(
+        valueAtIndex(humiditySeries, currentWarsawHour, MOCK_CURRENT_WEATHER.humidityPercent)
+      ),
+      windSpeedValue: roundOne(
+        valueAtIndex(windSpeedSeries, currentWarsawHour, MOCK_CURRENT_WEATHER.windSpeedValue)
+      ),
+      windDirection: degreesToWindDirectionLabel(windDirectionDegrees),
+      pressureValue: Math.round(
+        valueAtIndex(pressureSeries, currentWarsawHour, MOCK_CURRENT_WEATHER.pressureValue)
+      ),
+      uvIndexValue,
+      uvIndexLabel: uvIndexToLabel(uvIndexValue),
+      trendDeltaLabel: `${deltaPrefix}${deltaValue} from previous`,
+      trendPoints: buildOpenMeteoTrendPoints(temperatureSeries, currentWarsawHour),
+      cloudCoverPercent,
+    };
+
+    openMeteoDashboardCache = {
+      expiresAt: now + OPEN_METEO_CACHE_TTL_MS,
+      value: forecast,
+    };
+
+    return forecast;
+  } catch {
+    return null;
+  }
+}
+
+function buildCurrentWeatherFromOpenMeteo(
+  forecast: OpenMeteoDashboardForecast
+): CurrentWeatherData {
+  return {
+    ...MOCK_CURRENT_WEATHER,
+    temperatureValue: forecast.temperatureValue,
+    humidityPercent: forecast.humidityPercent,
+    weatherIconName: resolveDashboardIconName(forecast.cloudCoverPercent),
+    windSpeedValue: forecast.windSpeedValue,
+    windDirection: forecast.windDirection,
+    uvIndexValue: forecast.uvIndexValue,
+    uvIndexLabel: forecast.uvIndexLabel,
+    pressureValue: forecast.pressureValue,
+    trendDeltaLabel: forecast.trendDeltaLabel,
+    trendPoints: forecast.trendPoints.length ? forecast.trendPoints : MOCK_CURRENT_WEATHER.trendPoints,
+  };
 }
 
 function parseDate(value: string): Date {
@@ -542,18 +771,46 @@ export function subscribeToNewWeatherRows(
 export async function fetchCurrentWeatherTemplate(): Promise<CurrentWeatherData> {
   const todayStart = startOfLocalDay(new Date());
   const currentHour = new Date().getHours();
-  const rowsDesc = await fetchWeatherRows({
-    limit: 1000,
-    sinceIso: todayStart.toISOString(),
-  });
+  const [rowsDesc, openMeteoForecast] = await Promise.all([
+    fetchWeatherRows({
+      limit: 1000,
+      sinceIso: todayStart.toISOString(),
+    }),
+    fetchOpenMeteoDashboardForecast(),
+  ]);
+
+  const openMeteoPatch = openMeteoForecast
+    ? {
+        windSpeedValue: openMeteoForecast.windSpeedValue,
+        windDirection: openMeteoForecast.windDirection,
+        pressureValue: openMeteoForecast.pressureValue,
+        uvIndexValue: openMeteoForecast.uvIndexValue,
+        uvIndexLabel: openMeteoForecast.uvIndexLabel,
+        weatherIconName: resolveDashboardIconName(openMeteoForecast.cloudCoverPercent),
+      }
+    : null;
 
   if (!rowsDesc.length) {
-    return MOCK_CURRENT_WEATHER;
+    if (openMeteoForecast) {
+      return buildCurrentWeatherFromOpenMeteo(openMeteoForecast);
+    }
+
+    return {
+      ...MOCK_CURRENT_WEATHER,
+      ...(openMeteoPatch ?? {}),
+    };
   }
 
   const rowsForToday = filterRowsForDay(rowsDesc, todayStart);
   if (!rowsForToday.length) {
-    return MOCK_CURRENT_WEATHER;
+    if (openMeteoForecast) {
+      return buildCurrentWeatherFromOpenMeteo(openMeteoForecast);
+    }
+
+    return {
+      ...MOCK_CURRENT_WEATHER,
+      ...(openMeteoPatch ?? {}),
+    };
   }
 
   const latestByHour = buildLatestRowsByHour(rowsForToday);
@@ -569,16 +826,11 @@ export async function fetchCurrentWeatherTemplate(): Promise<CurrentWeatherData>
 
   return {
     ...MOCK_CURRENT_WEATHER,
+    ...(openMeteoPatch ?? {}),
     temperatureValue: roundOne(latest.temperature),
     humidityPercent: Math.round(latest.humidity),
     trendDeltaLabel: `${deltaPrefix}${deltaValue} from previous`,
     trendPoints: trendPoints.length ? trendPoints : MOCK_CURRENT_WEATHER.trendPoints,
-    // Placeholders until you wire an external weather API for these metrics.
-    pressureValue: MOCK_CURRENT_WEATHER.pressureValue,
-    windSpeedValue: MOCK_CURRENT_WEATHER.windSpeedValue,
-    windDirection: MOCK_CURRENT_WEATHER.windDirection,
-    uvIndexValue: MOCK_CURRENT_WEATHER.uvIndexValue,
-    uvIndexLabel: MOCK_CURRENT_WEATHER.uvIndexLabel,
   };
 }
 

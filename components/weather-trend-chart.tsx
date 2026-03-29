@@ -23,6 +23,9 @@ const VIEWBOX_WIDTH = 1600;
 const VIEWBOX_HEIGHT = 300;
 const PADDING_X = 16;
 const PADDING_Y = 24;
+const GRID_TOP_Y = PADDING_Y;
+const GRID_MIDDLE_Y = VIEWBOX_HEIGHT / 2;
+const GRID_BOTTOM_Y = VIEWBOX_HEIGHT - PADDING_Y;
 
 function toChartPoints(points: WeatherTrendPoint[]): ChartPoint[] {
   if (!points.length) {
@@ -99,9 +102,23 @@ export function WeatherTrendChart({
           </LinearGradient>
         </Defs>
 
-        <Line x1={0} y1={50} x2={VIEWBOX_WIDTH} y2={50} stroke={gridColor} strokeWidth={1} />
-        <Line x1={0} y1={150} x2={VIEWBOX_WIDTH} y2={150} stroke={gridColor} strokeWidth={1} />
-        <Line x1={0} y1={250} x2={VIEWBOX_WIDTH} y2={250} stroke={gridColor} strokeWidth={1} />
+        <Line x1={0} y1={GRID_TOP_Y} x2={VIEWBOX_WIDTH} y2={GRID_TOP_Y} stroke={gridColor} strokeWidth={1} />
+        <Line
+          x1={0}
+          y1={GRID_MIDDLE_Y}
+          x2={VIEWBOX_WIDTH}
+          y2={GRID_MIDDLE_Y}
+          stroke={gridColor}
+          strokeWidth={1}
+        />
+        <Line
+          x1={0}
+          y1={GRID_BOTTOM_Y}
+          x2={VIEWBOX_WIDTH}
+          y2={GRID_BOTTOM_Y}
+          stroke={gridColor}
+          strokeWidth={1}
+        />
 
         <Path d={areaPath} fill="url(#trendGradient)" />
         <Path d={linePath} fill="none" stroke={lineColor} strokeWidth={4} strokeLinecap="round" />
